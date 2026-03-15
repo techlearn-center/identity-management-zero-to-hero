@@ -1,0 +1,15 @@
+# Multi-stage Dockerfile for Express Identity API
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY . .
+
+FROM node:20-alpine
+RUN addgroup -g 1001 -S appgroup && adduser -S appuser -u 1001 -G appgroup
+WORKDIR /app
+COPY --from=builder --chown=appuser:appgroup /app .
+USER appuser
+EXPOSE 3001
+HEALTHCHECK --interval=30s --timeout=3s CMD wget -q --spider http://localhost:3001/api/health || exit 1
+CMD ["node", "server.js"]

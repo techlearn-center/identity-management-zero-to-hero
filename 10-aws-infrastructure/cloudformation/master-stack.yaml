@@ -1,0 +1,258 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Master nested stack for the identity platform. Orchestrates VPC,
+  database, Lambda authorizer, API Gateway, ECS service, and monitoring.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+      - development
+    Description: Deployment environment
+
+  TemplateBucketName:
+    Type: String
+    Description: S3 bucket containing nested CloudFormation templates
+
+  TemplateBucketPrefix:
+    Type: String
+    Default: "cloudformation"
+    Description: S3 key prefix for templates
+
+  VpcCidr:
+    Type: String
+    Default: "10.0.0.0/16"
+    Description: CIDR block for the VPC
+
+  DBMasterPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 12
+    Description: Master password for RDS PostgreSQL
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.medium
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.r6g.large
+
+  ContainerImage:
+    Type: String
+    Description: Docker image URI for the identity service
+
+  JWTIssuer:
+    Type: String
+    Default: "https://your-tenant.auth0.com/"
+    Description: JWT issuer URL
+
+  JWTAudience:
+    Type: String
+    Default: "https://api.identity-service.com"
+    Description: Expected JWT audience
+
+  LambdaCodeBucket:
+    Type: String
+    Description: S3 bucket containing Lambda code
+
+  LambdaCodeKey:
+    Type: String
+    Default: "lambda/jwt-authorizer.zip"
+    Description: S3 key for Lambda deployment package
+
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM certificate ARN for HTTPS
+
+  AlarmEmail:
+    Type: String
+    Description: Email address for alarm notifications
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, "production"]
+
+Resources:
+  # ──────────────────────────────────────────────────────────────
+  # SNS Topic for Alarms
+  # ──────────────────────────────────────────────────────────────
+  AlarmSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${Environment}-identity-alarms"
+      DisplayName: Identity Service Alarms
+
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlarmSNSTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  # ──────────────────────────────────────────────────────────────
+  # 1. VPC Stack
+  # ──────────────────────────────────────────────────────────────
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucketName}.s3.amazonaws.com/${TemplateBucketPrefix}/vpc-identity.yaml"
+      Parameters:
+        Environment: !Ref Environment
+        VpcCidr: !Ref VpcCidr
+        EnableNatGateway: "true"
+        EnableFlowLogs: !If [IsProduction, "true", "false"]
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: vpc
+
+  # ──────────────────────────────────────────────────────────────
+  # 2. RDS PostgreSQL Stack
+  # ──────────────────────────────────────────────────────────────
+  RDSStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: VPCStack
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucketName}.s3.amazonaws.com/${TemplateBucketPrefix}/rds-postgresql.yaml"
+      Parameters:
+        Environment: !Ref Environment
+        VpcId: !GetAtt VPCStack.Outputs.VpcId
+        IsolatedSubnet1Id: !GetAtt VPCStack.Outputs.IsolatedSubnet1Id
+        IsolatedSubnet2Id: !GetAtt VPCStack.Outputs.IsolatedSubnet2Id
+        VpcCidr: !Ref VpcCidr
+        DBMasterPassword: !Ref DBMasterPassword
+        DBInstanceClass: !Ref DBInstanceClass
+        MultiAZ: !If [IsProduction, "true", "false"]
+        BackupRetentionPeriod: !If [IsProduction, 30, 7]
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: rds
+
+  # ──────────────────────────────────────────────────────────────
+  # 3. Lambda Authorizer Stack
+  # ──────────────────────────────────────────────────────────────
+  LambdaAuthorizerStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: VPCStack
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucketName}.s3.amazonaws.com/${TemplateBucketPrefix}/lambda-authorizer.yaml"
+      Parameters:
+        Environment: !Ref Environment
+        VpcId: !GetAtt VPCStack.Outputs.VpcId
+        PrivateSubnet1Id: !GetAtt VPCStack.Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id: !GetAtt VPCStack.Outputs.PrivateSubnet2Id
+        JWTIssuer: !Ref JWTIssuer
+        JWTAudience: !Ref JWTAudience
+        LambdaCodeBucket: !Ref LambdaCodeBucket
+        LambdaCodeKey: !Ref LambdaCodeKey
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: lambda-authorizer
+
+  # ──────────────────────────────────────────────────────────────
+  # 4. API Gateway Stack
+  # ──────────────────────────────────────────────────────────────
+  APIGatewayStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: LambdaAuthorizerStack
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucketName}.s3.amazonaws.com/${TemplateBucketPrefix}/api-gateway-auth.yaml"
+      Parameters:
+        Environment: !Ref Environment
+        AuthorizerFunctionArn: !GetAtt LambdaAuthorizerStack.Outputs.AuthorizerFunctionArn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: api-gateway
+
+  # ──────────────────────────────────────────────────────────────
+  # 5. ECS Service Stack
+  # ──────────────────────────────────────────────────────────────
+  ECSStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - VPCStack
+      - RDSStack
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucketName}.s3.amazonaws.com/${TemplateBucketPrefix}/ecs-identity-service.yaml"
+      Parameters:
+        Environment: !Ref Environment
+        VpcId: !GetAtt VPCStack.Outputs.VpcId
+        PublicSubnet1Id: !GetAtt VPCStack.Outputs.PublicSubnet1Id
+        PublicSubnet2Id: !GetAtt VPCStack.Outputs.PublicSubnet2Id
+        PrivateSubnet1Id: !GetAtt VPCStack.Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id: !GetAtt VPCStack.Outputs.PrivateSubnet2Id
+        ContainerImage: !Ref ContainerImage
+        DBSecretArn: !GetAtt RDSStack.Outputs.DBSecretArn
+        DesiredCount: !If [IsProduction, 2, 1]
+        CertificateArn: !Ref CertificateArn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: ecs
+
+  # ──────────────────────────────────────────────────────────────
+  # 6. CloudWatch Monitoring Stack
+  # ──────────────────────────────────────────────────────────────
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - ECSStack
+      - LambdaAuthorizerStack
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucketName}.s3.amazonaws.com/${TemplateBucketPrefix}/cloudwatch-monitoring.yaml"
+      Parameters:
+        Environment: !Ref Environment
+        ECSClusterName: !GetAtt ECSStack.Outputs.ClusterName
+        ECSServiceName: !GetAtt ECSStack.Outputs.ServiceName
+        ALBFullName: !GetAtt ECSStack.Outputs.ALBDnsName
+        TargetGroupFullName: ""
+        DBInstanceIdentifier: !Sub "${Environment}-identity-db"
+        LambdaFunctionName: !GetAtt LambdaAuthorizerStack.Outputs.AuthorizerFunctionName
+        AlarmSNSTopicArn: !Ref AlarmSNSTopic
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: monitoring
+
+Outputs:
+  VpcId:
+    Description: VPC ID
+    Value: !GetAtt VPCStack.Outputs.VpcId
+
+  DatabaseEndpoint:
+    Description: RDS endpoint
+    Value: !GetAtt RDSStack.Outputs.DBEndpoint
+
+  APIEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !GetAtt APIGatewayStack.Outputs.ApiEndpoint
+
+  ServiceURL:
+    Description: Identity service ALB URL
+    Value: !GetAtt ECSStack.Outputs.ServiceUrl
+
+  DashboardURL:
+    Description: CloudWatch dashboard URL
+    Value: !GetAtt MonitoringStack.Outputs.DashboardUrl
+
+  AlarmTopicArn:
+    Description: SNS topic for alarms
+    Value: !Ref AlarmSNSTopic
+
+  StackId:
+    Description: Master stack ID
+    Value: !Ref "AWS::StackId"

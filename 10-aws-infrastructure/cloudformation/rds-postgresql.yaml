@@ -1,0 +1,306 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  RDS PostgreSQL instance for identity service data storage.
+  Deployed in isolated subnets with encryption, automated backups,
+  and IAM database authentication.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+      - development
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for the database
+
+  IsolatedSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: First isolated subnet for RDS
+
+  IsolatedSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second isolated subnet for RDS
+
+  VpcCidr:
+    Type: String
+    Description: VPC CIDR block for security group rules
+
+  DBMasterUsername:
+    Type: String
+    Default: identity_admin
+    Description: Master username for the database
+    MinLength: 1
+    MaxLength: 63
+
+  DBMasterPassword:
+    Type: String
+    NoEcho: true
+    Description: Master password for the database
+    MinLength: 12
+    MaxLength: 128
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.medium
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.r6g.large
+      - db.r6g.xlarge
+    Description: RDS instance class
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 50
+    MinValue: 20
+    MaxValue: 1000
+    Description: Allocated storage in GB
+
+  MultiAZ:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable Multi-AZ deployment
+
+  BackupRetentionPeriod:
+    Type: Number
+    Default: 30
+    MinValue: 7
+    MaxValue: 35
+    Description: Number of days to retain automated backups
+
+Conditions:
+  IsMultiAZ: !Equals [!Ref MultiAZ, "true"]
+  IsProduction: !Equals [!Ref Environment, "production"]
+
+Resources:
+  # ──────────────────────────────────────────────────────────────
+  # DB Subnet Group
+  # ──────────────────────────────────────────────────────────────
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Isolated subnets for identity database
+      SubnetIds:
+        - !Ref IsolatedSubnet1Id
+        - !Ref IsolatedSubnet2Id
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-identity-db-subnet-group"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ──────────────────────────────────────────────────────────────
+  # Security Group
+  # ──────────────────────────────────────────────────────────────
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for identity RDS PostgreSQL
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !Ref VpcCidr
+          Description: PostgreSQL from VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: "0.0.0.0/0"
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-identity-db-sg"
+
+  # ──────────────────────────────────────────────────────────────
+  # KMS Key for Encryption
+  # ──────────────────────────────────────────────────────────────
+  DBEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for identity database encryption
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnableRootAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: AllowRDSUse
+            Effect: Allow
+            Principal:
+              AWS: "*"
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+              - kms:CreateGrant
+            Resource: "*"
+            Condition:
+              StringEquals:
+                kms:ViaService: !Sub "rds.${AWS::Region}.amazonaws.com"
+                kms:CallerAccount: !Ref "AWS::AccountId"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-identity-db-key"
+
+  DBEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${Environment}-identity-db"
+      TargetKeyId: !Ref DBEncryptionKey
+
+  # ──────────────────────────────────────────────────────────────
+  # Parameter Group
+  # ──────────────────────────────────────────────────────────────
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Family: postgres16
+      Description: Parameter group for identity database
+      Parameters:
+        log_statement: all
+        log_min_duration_statement: "1000"
+        log_connections: "1"
+        log_disconnections: "1"
+        password_encryption: "scram-sha-256"
+        ssl: "1"
+        rds.force_ssl: "1"
+        shared_preload_libraries: "pgaudit,pg_stat_statements"
+        pgaudit.log: "all"
+        pg_stat_statements.track: "all"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-identity-db-params"
+
+  # ──────────────────────────────────────────────────────────────
+  # RDS Instance
+  # ──────────────────────────────────────────────────────────────
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${Environment}-identity-db"
+      DBName: identity
+      Engine: postgres
+      EngineVersion: "16.4"
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      MaxAllocatedStorage: !If [IsProduction, 500, 100]
+      StorageType: gp3
+      StorageEncrypted: true
+      KmsKeyId: !Ref DBEncryptionKey
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword: !Ref DBMasterPassword
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
+      DBParameterGroupName: !Ref DBParameterGroup
+      MultiAZ: !If [IsMultiAZ, true, false]
+      PubliclyAccessible: false
+      EnableIAMDatabaseAuthentication: true
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod
+      PreferredBackupWindow: "03:00-04:00"
+      PreferredMaintenanceWindow: "sun:04:00-sun:05:00"
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
+      DeletionProtection: !If [IsProduction, true, false]
+      EnablePerformanceInsights: !If [IsProduction, true, false]
+      PerformanceInsightsRetentionPeriod: !If [IsProduction, 731, 7]
+      MonitoringInterval: !If [IsProduction, 60, 0]
+      MonitoringRoleArn: !If
+        - IsProduction
+        - !GetAtt RDSMonitoringRole.Arn
+        - !Ref "AWS::NoValue"
+      EnableCloudwatchLogsExports:
+        - postgresql
+        - upgrade
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-identity-db"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Service
+          Value: identity
+
+  # ──────────────────────────────────────────────────────────────
+  # Enhanced Monitoring Role
+  # ──────────────────────────────────────────────────────────────
+  RDSMonitoringRole:
+    Type: AWS::IAM::Role
+    Condition: IsProduction
+    Properties:
+      RoleName: !Sub "${Environment}-identity-rds-monitoring"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+
+  # ──────────────────────────────────────────────────────────────
+  # Secret for DB Credentials
+  # ──────────────────────────────────────────────────────────────
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${Environment}/identity/database"
+      Description: Identity database credentials
+      SecretString: !Sub |
+        {
+          "username": "${DBMasterUsername}",
+          "password": "${DBMasterPassword}",
+          "engine": "postgres",
+          "host": "${DBInstance.Endpoint.Address}",
+          "port": ${DBInstance.Endpoint.Port},
+          "dbname": "identity"
+        }
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Service
+          Value: identity
+
+Outputs:
+  DBEndpoint:
+    Description: Database endpoint address
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: !Sub "${Environment}-identity-db-endpoint"
+
+  DBPort:
+    Description: Database port
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export:
+      Name: !Sub "${Environment}-identity-db-port"
+
+  DBSecurityGroupId:
+    Description: Database security group ID
+    Value: !Ref DBSecurityGroup
+    Export:
+      Name: !Sub "${Environment}-identity-db-sg"
+
+  DBSecretArn:
+    Description: ARN of the database credentials secret
+    Value: !Ref DBSecret
+    Export:
+      Name: !Sub "${Environment}-identity-db-secret-arn"
+
+  DBInstanceArn:
+    Description: ARN of the RDS instance
+    Value: !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${DBInstance}"

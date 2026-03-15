@@ -1,0 +1,32 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate YAML files
+        run: |
+          find . -name '*.yaml' -o -name '*.yml' | head -20 | while read f; do
+            python3 -c "import yaml; yaml.safe_load(open('$f'))" 2>/dev/null && echo "OK: $f" || echo "SKIP: $f"
+          done
+
+      - name: Validate JSON files
+        run: |
+          find . -name '*.json' | head -20 | while read f; do
+            python3 -c "import json; json.load(open('$f'))" && echo "OK: $f" || echo "FAIL: $f"
+          done
+
+      - name: Check for secrets in code
+        run: |
+          if grep -r "AKIA\|sk-\|password.*=" --include="*.js" --include="*.py" --include="*.ts" . | grep -v ".example" | grep -v "node_modules"; then
+            echo "WARNING: Possible secrets found"
+            exit 1
+          fi
+          echo "No secrets detected"

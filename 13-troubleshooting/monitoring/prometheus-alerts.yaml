@@ -1,0 +1,35 @@
+groups:
+  - name: identity-alerts
+    rules:
+      - alert: HighLoginFailureRate
+        expr: rate(auth_login_failures_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High login failure rate detected
+          description: More than 10 failed logins per second for 5 minutes
+
+      - alert: AuthServiceDown
+        expr: up{job="identity-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Identity API is down
+
+      - alert: HighTokenValidationLatency
+        expr: histogram_quantile(0.95, rate(token_validation_duration_seconds_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Token validation is slow (p95 > 500ms)
+
+      - alert: TooManyActiveSessions
+        expr: active_sessions_total > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Unusually high number of active sessions

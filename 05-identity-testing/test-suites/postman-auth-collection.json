@@ -1,0 +1,76 @@
+{
+  "info": {
+    "name": "Identity Lab - Auth API Tests",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key": "base_url", "value": "http://localhost:3000"},
+    {"key": "auth0_domain", "value": "your-tenant.auth0.com"},
+    {"key": "access_token", "value": ""}
+  ],
+  "item": [
+    {
+      "name": "Auth Flows",
+      "item": [
+        {
+          "name": "Login - Valid Credentials",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/auth/login",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"TestP@ss123!\"\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                "pm.test('Has access_token', () => pm.expect(pm.response.json().access_token).to.exist);",
+                "pm.collectionVariables.set('access_token', pm.response.json().access_token);"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "Login - Invalid Password",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/auth/login",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"wrong\"\n}"}
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"exec": ["pm.test('Status is 401', () => pm.response.to.have.status(401));"]}
+          }]
+        },
+        {
+          "name": "Get Profile - Authenticated",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/users/me",
+            "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}]
+          },
+          "event": [{
+            "listen": "test",
+            "script": {"exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('Has email', () => pm.expect(pm.response.json().email).to.exist);"
+            ]}
+          }]
+        },
+        {
+          "name": "Get Profile - No Token",
+          "request": {"method": "GET", "url": "{{base_url}}/api/users/me"},
+          "event": [{
+            "listen": "test",
+            "script": {"exec": ["pm.test('Status is 401', () => pm.response.to.have.status(401));"]}
+          }]
+        }
+      ]
+    }
+  ]
+}

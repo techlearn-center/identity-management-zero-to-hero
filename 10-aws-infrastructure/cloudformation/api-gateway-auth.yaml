@@ -1,0 +1,368 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  API Gateway REST API with JWT authorizer for identity service endpoints.
+  Supports Lambda authorizer and Cognito authorizer patterns.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+      - development
+
+  AuthorizerFunctionArn:
+    Type: String
+    Description: ARN of the Lambda JWT authorizer function
+
+  IdentityServiceEndpoint:
+    Type: String
+    Description: Backend identity service endpoint URL
+    Default: "https://identity-service.internal"
+
+  StageName:
+    Type: String
+    Default: v1
+    Description: API Gateway stage name
+
+  ThrottlingRateLimit:
+    Type: Number
+    Default: 1000
+    Description: Requests per second rate limit
+
+  ThrottlingBurstLimit:
+    Type: Number
+    Default: 2000
+    Description: Burst limit for throttling
+
+Resources:
+  # ──────────────────────────────────────────────────────────────
+  # REST API
+  # ──────────────────────────────────────────────────────────────
+  IdentityApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${Environment}-identity-api"
+      Description: Identity service API with JWT authorization
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Policy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: execute-api:Invoke
+            Resource: "execute-api:/*"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Service
+          Value: identity
+
+  # ──────────────────────────────────────────────────────────────
+  # Lambda Authorizer
+  # ──────────────────────────────────────────────────────────────
+  JWTAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: !Sub "${Environment}-jwt-authorizer"
+      Type: TOKEN
+      RestApiId: !Ref IdentityApi
+      AuthorizerUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerFunctionArn}/invocations"
+      AuthorizerResultTtlInSeconds: 300
+      IdentitySource: method.request.header.Authorization
+      IdentityValidationExpression: "^Bearer [-0-9a-zA-Z._]*$"
+
+  # ──────────────────────────────────────────────────────────────
+  # API Resources
+  # ──────────────────────────────────────────────────────────────
+
+  # /auth
+  AuthResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ParentId: !GetAtt IdentityApi.RootResourceId
+      PathPart: auth
+
+  # /auth/login (public - no auth required)
+  LoginResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ParentId: !Ref AuthResource
+      PathPart: login
+
+  # /auth/register (public - no auth required)
+  RegisterResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ParentId: !Ref AuthResource
+      PathPart: register
+
+  # /auth/refresh (public - uses refresh token)
+  RefreshResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ParentId: !Ref AuthResource
+      PathPart: refresh
+
+  # /users
+  UsersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ParentId: !GetAtt IdentityApi.RootResourceId
+      PathPart: users
+
+  # /users/{userId}
+  UserByIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ParentId: !Ref UsersResource
+      PathPart: "{userId}"
+
+  # /users/{userId}/roles
+  UserRolesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ParentId: !Ref UserByIdResource
+      PathPart: roles
+
+  # ──────────────────────────────────────────────────────────────
+  # Methods - Public Endpoints
+  # ──────────────────────────────────────────────────────────────
+  LoginPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ResourceId: !Ref LoginResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "${IdentityServiceEndpoint}/auth/login"
+        IntegrationResponses:
+          - StatusCode: "200"
+      MethodResponses:
+        - StatusCode: "200"
+
+  RegisterPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ResourceId: !Ref RegisterResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "${IdentityServiceEndpoint}/auth/register"
+        IntegrationResponses:
+          - StatusCode: "200"
+      MethodResponses:
+        - StatusCode: "200"
+
+  RefreshPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ResourceId: !Ref RefreshResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "${IdentityServiceEndpoint}/auth/refresh"
+        IntegrationResponses:
+          - StatusCode: "200"
+      MethodResponses:
+        - StatusCode: "200"
+
+  # ──────────────────────────────────────────────────────────────
+  # Methods - Protected Endpoints (JWT Required)
+  # ──────────────────────────────────────────────────────────────
+  UsersGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ResourceId: !Ref UsersResource
+      HttpMethod: GET
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref JWTAuthorizer
+      RequestParameters:
+        method.request.header.Authorization: true
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: GET
+        Uri: !Sub "${IdentityServiceEndpoint}/users"
+        RequestParameters:
+          integration.request.header.X-User-Id: context.authorizer.userId
+          integration.request.header.X-User-Roles: context.authorizer.roles
+        IntegrationResponses:
+          - StatusCode: "200"
+      MethodResponses:
+        - StatusCode: "200"
+
+  UserByIdGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ResourceId: !Ref UserByIdResource
+      HttpMethod: GET
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref JWTAuthorizer
+      RequestParameters:
+        method.request.header.Authorization: true
+        method.request.path.userId: true
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: GET
+        Uri: !Sub "${IdentityServiceEndpoint}/users/{userId}"
+        RequestParameters:
+          integration.request.path.userId: method.request.path.userId
+          integration.request.header.X-User-Id: context.authorizer.userId
+        IntegrationResponses:
+          - StatusCode: "200"
+      MethodResponses:
+        - StatusCode: "200"
+
+  UserRolesGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ResourceId: !Ref UserRolesResource
+      HttpMethod: GET
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref JWTAuthorizer
+      RequestParameters:
+        method.request.header.Authorization: true
+        method.request.path.userId: true
+      Integration:
+        Type: HTTP_PROXY
+        IntegrationHttpMethod: GET
+        Uri: !Sub "${IdentityServiceEndpoint}/users/{userId}/roles"
+        RequestParameters:
+          integration.request.path.userId: method.request.path.userId
+          integration.request.header.X-User-Id: context.authorizer.userId
+        IntegrationResponses:
+          - StatusCode: "200"
+      MethodResponses:
+        - StatusCode: "200"
+
+  # ──────────────────────────────────────────────────────────────
+  # CORS Configuration
+  # ──────────────────────────────────────────────────────────────
+  UsersOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref IdentityApi
+      ResourceId: !Ref UsersResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # ──────────────────────────────────────────────────────────────
+  # Deployment and Stage
+  # ──────────────────────────────────────────────────────────────
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - LoginPostMethod
+      - RegisterPostMethod
+      - RefreshPostMethod
+      - UsersGetMethod
+      - UserByIdGetMethod
+      - UserRolesGetMethod
+      - UsersOptionsMethod
+    Properties:
+      RestApiId: !Ref IdentityApi
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref IdentityApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: !Ref StageName
+      Description: !Sub "${Environment} stage"
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingRateLimit: !Ref ThrottlingRateLimit
+          ThrottlingBurstLimit: !Ref ThrottlingBurstLimit
+          LoggingLevel: INFO
+          DataTraceEnabled: false
+          MetricsEnabled: true
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","caller":"$context.identity.caller","user":"$context.identity.user","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength","authorizer.error":"$context.authorizer.error"}'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ──────────────────────────────────────────────────────────────
+  # Access Logging
+  # ──────────────────────────────────────────────────────────────
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/apigateway/${Environment}-identity-api/access-logs"
+      RetentionInDays: 90
+
+  # ──────────────────────────────────────────────────────────────
+  # Usage Plan and API Key
+  # ──────────────────────────────────────────────────────────────
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: ApiStage
+    Properties:
+      UsagePlanName: !Sub "${Environment}-identity-usage-plan"
+      Description: Usage plan for identity API
+      ApiStages:
+        - ApiId: !Ref IdentityApi
+          Stage: !Ref StageName
+      Throttle:
+        RateLimit: !Ref ThrottlingRateLimit
+        BurstLimit: !Ref ThrottlingBurstLimit
+      Quota:
+        Limit: 100000
+        Period: DAY
+
+Outputs:
+  ApiId:
+    Description: API Gateway REST API ID
+    Value: !Ref IdentityApi
+    Export:
+      Name: !Sub "${Environment}-identity-api-id"
+
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${IdentityApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+    Export:
+      Name: !Sub "${Environment}-identity-api-endpoint"
+
+  ApiStageArn:
+    Description: ARN of the API stage
+    Value: !Sub "arn:aws:apigateway:${AWS::Region}::/restapis/${IdentityApi}/stages/${StageName}"

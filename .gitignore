@@ -1,0 +1,16 @@
+node_modules/
+__pycache__/
+*.pyc
+.env
+.env.local
+*.pem
+*.key
+dist/
+build/
+.DS_Store
+Thumbs.db
+*.log
+.terraform/
+*.tfstate*
+.vscode/
+.idea/

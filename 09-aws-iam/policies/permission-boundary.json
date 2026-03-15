@@ -1,0 +1,30 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowedServices",
+      "Effect": "Allow",
+      "Action": [
+        "s3:*", "dynamodb:*", "lambda:*", "logs:*",
+        "secretsmanager:GetSecretValue", "sqs:*", "sns:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyIAMChanges",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateUser", "iam:DeleteUser", "iam:CreateRole",
+        "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+        "iam:PutRolePolicy", "iam:DeleteRolePolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyOrganizationChanges",
+      "Effect": "Deny",
+      "Action": ["organizations:*"],
+      "Resource": "*"
+    }
+  ]
+}

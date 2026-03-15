@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "identity-service.fullname" . }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "identity-service.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}

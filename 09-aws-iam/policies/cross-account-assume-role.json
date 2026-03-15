@@ -1,0 +1,15 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowCrossAccountAssume",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::TRUSTED_ACCOUNT_ID:root"},
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": {"sts:ExternalId": "identity-lab-external-id"},
+        "Bool": {"aws:MultiFactorAuthPresent": "true"}
+      }
+    }
+  ]
+}

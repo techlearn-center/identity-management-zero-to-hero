@@ -1,0 +1,47 @@
+{
+  "tenant": {
+    "friendly_name": "Identity Lab",
+    "session_lifetime": 1,
+    "idle_session_lifetime": 0.5
+  },
+  "applications": [
+    {
+      "name": "Identity Lab - Web App",
+      "app_type": "regular_web",
+      "callbacks": ["http://localhost:3000/callback"],
+      "allowed_logout_urls": ["http://localhost:3000"],
+      "grant_types": ["authorization_code", "refresh_token"]
+    },
+    {
+      "name": "Identity Lab - SPA",
+      "app_type": "spa",
+      "callbacks": ["http://localhost:3001/callback"],
+      "allowed_logout_urls": ["http://localhost:3001"],
+      "grant_types": ["authorization_code", "refresh_token"]
+    },
+    {
+      "name": "Identity Lab - M2M",
+      "app_type": "non_interactive",
+      "grant_types": ["client_credentials"]
+    }
+  ],
+  "apis": [
+    {
+      "name": "Identity Lab API",
+      "identifier": "https://api.identity-lab.local",
+      "signing_alg": "RS256",
+      "token_lifetime": 900,
+      "scopes": [
+        {"value": "read:data", "description": "Read data"},
+        {"value": "write:data", "description": "Write data"},
+        {"value": "delete:data", "description": "Delete data"},
+        {"value": "admin:all", "description": "Full admin access"}
+      ]
+    }
+  ],
+  "roles": [
+    {"name": "admin", "description": "Full admin", "permissions": ["read:data", "write:data", "delete:data", "admin:all"]},
+    {"name": "editor", "description": "Edit content", "permissions": ["read:data", "write:data"]},
+    {"name": "viewer", "description": "Read only", "permissions": ["read:data"]}
+  ]
+}

@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: identity-config
+  namespace: identity
+data:
+  AUTH0_DOMAIN: "your-tenant.auth0.com"
+  AUTH0_AUDIENCE: "https://api.identity-lab.local"
+  NODE_ENV: "production"
+  PORT: "3001"

@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Lambda JWT authorizer for API Gateway. Validates JWT tokens
+  from Auth0 or any OIDC-compliant identity provider.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+      - development
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for Lambda deployment
+
+  PrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: First private subnet for Lambda
+
+  PrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second private subnet for Lambda
+
+  JWTIssuer:
+    Type: String
+    Default: "https://your-tenant.auth0.com/"
+    Description: JWT issuer URL (Auth0 domain with trailing slash)
+
+  JWTAudience:
+    Type: String
+    Default: "https://api.identity-service.com"
+    Description: Expected JWT audience
+
+  LambdaCodeBucket:
+    Type: String
+    Description: S3 bucket containing the Lambda deployment package
+
+  LambdaCodeKey:
+    Type: String
+    Default: "lambda/jwt-authorizer.zip"
+    Description: S3 key for the Lambda deployment package
+
+Resources:
+  # ──────────────────────────────────────────────────────────────
+  # Lambda Security Group
+  # ──────────────────────────────────────────────────────────────
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for JWT authorizer Lambda
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "0.0.0.0/0"
+          Description: HTTPS outbound for JWKS fetching
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-jwt-authorizer-sg"
+
+  # ──────────────────────────────────────────────────────────────
+  # Lambda Execution Role
+  # ──────────────────────────────────────────────────────────────
+  AuthorizerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Environment}-jwt-authorizer-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AuthorizerPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowCloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${Environment}-jwt-authorizer:*"
+              - Sid: AllowVPCAccess
+                Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+              - Sid: AllowSecretsManagerRead
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${Environment}/identity/jwt-*"
+              - Sid: AllowXRay
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
+
+  # ──────────────────────────────────────────────────────────────
+  # Lambda Function
+  # ──────────────────────────────────────────────────────────────
+  AuthorizerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${Environment}-jwt-authorizer"
+      Description: JWT token validation authorizer for API Gateway
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+      Role: !GetAtt AuthorizerExecutionRole.Arn
+      Timeout: 10
+      MemorySize: 256
+      TracingConfig:
+        Mode: Active
+      Environment:
+        Variables:
+          JWT_ISSUER: !Ref JWTIssuer
+          JWT_AUDIENCE: !Ref JWTAudience
+          ENVIRONMENT: !Ref Environment
+          LOG_LEVEL: !If
+            - IsProduction
+            - "warn"
+            - "debug"
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1Id
+          - !Ref PrivateSubnet2Id
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Service
+          Value: identity
+
+  # ──────────────────────────────────────────────────────────────
+  # Lambda Log Group
+  # ──────────────────────────────────────────────────────────────
+  AuthorizerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Environment}-jwt-authorizer"
+      RetentionInDays: !If
+        - IsProduction
+        - 90
+        - 14
+
+  # ──────────────────────────────────────────────────────────────
+  # Lambda Permission for API Gateway
+  # ──────────────────────────────────────────────────────────────
+  AuthorizerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*"
+
+  # ──────────────────────────────────────────────────────────────
+  # Lambda Alias for Stable Reference
+  # ──────────────────────────────────────────────────────────────
+  AuthorizerAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref AuthorizerFunction
+      FunctionVersion: $LATEST
+      Name: live
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, "production"]
+
+Outputs:
+  AuthorizerFunctionArn:
+    Description: ARN of the JWT authorizer Lambda function
+    Value: !GetAtt AuthorizerFunction.Arn
+    Export:
+      Name: !Sub "${Environment}-jwt-authorizer-arn"
+
+  AuthorizerFunctionName:
+    Description: Name of the JWT authorizer Lambda function
+    Value: !Ref AuthorizerFunction
+    Export:
+      Name: !Sub "${Environment}-jwt-authorizer-name"
+
+  AuthorizerAliasArn:
+    Description: ARN of the live alias
+    Value: !Ref AuthorizerAlias
+    Export:
+      Name: !Sub "${Environment}-jwt-authorizer-alias-arn"
+
+  AuthorizerRoleArn:
+    Description: ARN of the authorizer execution role
+    Value: !GetAtt AuthorizerExecutionRole.Arn

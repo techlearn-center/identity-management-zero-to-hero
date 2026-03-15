@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SAML 2.0 Service Provider Metadata Example
+
+  This metadata file describes your Service Provider (SP) configuration
+  and is shared with the Identity Provider (IdP) to establish trust.
+
+  Key elements:
+  - entityID: Unique identifier for your SP
+  - AssertionConsumerService: URL where IdP sends SAML assertions
+  - SingleLogoutService: URL for logout requests
+  - NameIDFormat: Expected format for user identifiers
+  - Signing/Encryption certificates (optional but recommended)
+-->
+<md:EntityDescriptor
+    xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+    xmlns:ds="http://www.w3.org/2000/09/xmldsig#"
+    entityID="urn:example:sp:identity-lab"
+    validUntil="2027-01-01T00:00:00Z">
+
+  <!--
+    SPSSODescriptor: Describes this entity as a SAML Service Provider
+    - AuthnRequestsSigned: SP signs authentication requests
+    - WantAssertionsSigned: SP requires signed assertions from IdP
+    - protocolSupportEnumeration: SAML 2.0 protocol
+  -->
+  <md:SPSSODescriptor
+      AuthnRequestsSigned="true"
+      WantAssertionsSigned="true"
+      protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+
+    <!--
+      KeyDescriptor: X.509 certificate for signing and encryption
+      The IdP uses this to verify SP-signed requests and encrypt assertions
+    -->
+    <md:KeyDescriptor use="signing">
+      <ds:KeyInfo>
+        <ds:X509Data>
+          <ds:X509Certificate>
+            MIICojCCAYoCCQDXKnOQFcKHQDANBgkqhkiG9w0BAQsFADATMREwDwYDVQQDDAhs
+            b2NhbGhvc3QwHhcNMjQwMTE1MDAwMDAwWhcNMjUwMTE1MDAwMDAwWjATMREwDwYD
+            VQQDDAhsb2NhbGhvc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC7
+            <!-- Replace with your actual SP certificate -->
+            EXAMPLE_CERTIFICATE_CONTENT_HERE
+          </ds:X509Certificate>
+        </ds:X509Data>
+      </ds:KeyInfo>
+    </md:KeyDescriptor>
+
+    <md:KeyDescriptor use="encryption">
+      <ds:KeyInfo>
+        <ds:X509Data>
+          <ds:X509Certificate>
+            <!-- Same or different certificate for encryption -->
+            EXAMPLE_ENCRYPTION_CERTIFICATE_HERE
+          </ds:X509Certificate>
+        </ds:X509Data>
+      </ds:KeyInfo>
+    </md:KeyDescriptor>
+
+    <!--
+      SingleLogoutService: Endpoint for SAML logout
+      - HTTP-Redirect binding: IdP sends logout request via URL redirect
+      - HTTP-POST binding: IdP sends logout request via form POST
+    -->
+    <md:SingleLogoutService
+        Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+        Location="https://app.example.com/saml/logout"
+        ResponseLocation="https://app.example.com/saml/logout/response"/>
+
+    <md:SingleLogoutService
+        Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+        Location="https://app.example.com/saml/logout"/>
+
+    <!--
+      NameIDFormat: Supported formats for user identifiers
+      Common formats:
+      - emailAddress: user's email (most common)
+      - persistent: opaque, persistent identifier
+      - transient: temporary, one-time identifier
+      - unspecified: IdP decides the format
+    -->
+    <md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress</md:NameIDFormat>
+    <md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:persistent</md:NameIDFormat>
+
+    <!--
+      AssertionConsumerService (ACS): Where IdP sends SAML assertions
+      - index: Priority order (0 = primary)
+      - isDefault: Whether this is the default ACS
+      - Binding: How the assertion is delivered
+        - HTTP-POST: Form POST (most common, more secure)
+        - HTTP-Artifact: Reference-based (assertion fetched separately)
+    -->
+    <md:AssertionConsumerService
+        Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+        Location="https://app.example.com/saml/acs"
+        index="0"
+        isDefault="true"/>
+
+    <md:AssertionConsumerService
+        Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Artifact"
+        Location="https://app.example.com/saml/acs/artifact"
+        index="1"/>
+
+    <!--
+      AttributeConsumingService: Declares which user attributes the SP needs
+      This tells the IdP what attributes to include in the assertion
+    -->
+    <md:AttributeConsumingService index="0" isDefault="true">
+      <md:ServiceName xml:lang="en">Identity Lab Application</md:ServiceName>
+      <md:ServiceDescription xml:lang="en">
+        Identity Management hands-on lab application
+      </md:ServiceDescription>
+
+      <!-- Required attributes -->
+      <md:RequestedAttribute
+          Name="http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"
+          NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri"
+          isRequired="true"/>
+
+      <md:RequestedAttribute
+          Name="http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname"
+          NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri"
+          isRequired="true"/>
+
+      <md:RequestedAttribute
+          Name="http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname"
+          NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri"
+          isRequired="true"/>
+
+      <!-- Optional attributes -->
+      <md:RequestedAttribute
+          Name="http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"
+          NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri"
+          isRequired="false"/>
+
+      <md:RequestedAttribute
+          Name="http://schemas.xmlsoap.org/claims/Group"
+          NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri"
+          isRequired="false"/>
+    </md:AttributeConsumingService>
+
+  </md:SPSSODescriptor>
+
+  <!--
+    Organization: Information about the SP organization
+  -->
+  <md:Organization>
+    <md:OrganizationName xml:lang="en">TechLearn Center</md:OrganizationName>
+    <md:OrganizationDisplayName xml:lang="en">TechLearn Center</md:OrganizationDisplayName>
+    <md:OrganizationURL xml:lang="en">https://techlearn-center.example.com</md:OrganizationURL>
+  </md:Organization>
+
+  <!--
+    ContactPerson: Technical and support contacts
+  -->
+  <md:ContactPerson contactType="technical">
+    <md:GivenName>Identity</md:GivenName>
+    <md:SurName>Admin</md:SurName>
+    <md:EmailAddress>identity-admin@example.com</md:EmailAddress>
+  </md:ContactPerson>
+
+  <md:ContactPerson contactType="support">
+    <md:GivenName>Help</md:GivenName>
+    <md:SurName>Desk</md:SurName>
+    <md:EmailAddress>support@example.com</md:EmailAddress>
+  </md:ContactPerson>
+
+</md:EntityDescriptor>

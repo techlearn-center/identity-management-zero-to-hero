@@ -1,0 +1,459 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CloudWatch dashboards, alarms, and metric filters for identity service
+  monitoring. Covers operational health, security events, and performance.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+      - development
+
+  ECSClusterName:
+    Type: String
+    Description: ECS cluster name for metrics
+
+  ECSServiceName:
+    Type: String
+    Description: ECS service name for metrics
+
+  ALBFullName:
+    Type: String
+    Description: Full name of the ALB (from ALB attributes)
+
+  TargetGroupFullName:
+    Type: String
+    Description: Full name of the target group
+
+  DBInstanceIdentifier:
+    Type: String
+    Description: RDS instance identifier
+
+  LambdaFunctionName:
+    Type: String
+    Description: JWT authorizer Lambda function name
+
+  AlarmSNSTopicArn:
+    Type: String
+    Description: SNS topic ARN for alarm notifications
+
+Resources:
+  # ──────────────────────────────────────────────────────────────
+  # CloudWatch Dashboard
+  # ──────────────────────────────────────────────────────────────
+  IdentityDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${Environment}-identity-service"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0, "y": 0, "width": 24, "height": 1,
+              "properties": {
+                "markdown": "# Identity Service Dashboard - ${Environment}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "ALB Request Count",
+                "metrics": [
+                  ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${ALBFullName}", {"stat": "Sum", "period": 60}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "ALB Response Time (ms)",
+                "metrics": [
+                  ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${ALBFullName}", {"stat": "p50", "period": 60, "label": "p50"}],
+                  ["...", {"stat": "p95", "period": 60, "label": "p95"}],
+                  ["...", {"stat": "p99", "period": 60, "label": "p99"}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "HTTP Error Rates",
+                "metrics": [
+                  ["AWS/ApplicationELB", "HTTPCode_Target_4XX_Count", "LoadBalancer", "${ALBFullName}", {"stat": "Sum", "period": 60, "label": "4xx"}],
+                  ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", "${ALBFullName}", {"stat": "Sum", "period": 60, "label": "5xx"}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "ECS CPU Utilization",
+                "metrics": [
+                  ["AWS/ECS", "CPUUtilization", "ClusterName", "${ECSClusterName}", "ServiceName", "${ECSServiceName}", {"stat": "Average", "period": 60}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "yAxis": {"left": {"min": 0, "max": 100}}
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "ECS Memory Utilization",
+                "metrics": [
+                  ["AWS/ECS", "MemoryUtilization", "ClusterName", "${ECSClusterName}", "ServiceName", "${ECSServiceName}", {"stat": "Average", "period": 60}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "yAxis": {"left": {"min": 0, "max": 100}}
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "ECS Running Task Count",
+                "metrics": [
+                  ["ECS/ContainerInsights", "RunningTaskCount", "ClusterName", "${ECSClusterName}", "ServiceName", "${ECSServiceName}", {"stat": "Average", "period": 60}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 13, "width": 8, "height": 6,
+              "properties": {
+                "title": "RDS CPU Utilization",
+                "metrics": [
+                  ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "${DBInstanceIdentifier}", {"stat": "Average", "period": 60}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "yAxis": {"left": {"min": 0, "max": 100}}
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 13, "width": 8, "height": 6,
+              "properties": {
+                "title": "RDS Database Connections",
+                "metrics": [
+                  ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", "${DBInstanceIdentifier}", {"stat": "Average", "period": 60}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 13, "width": 8, "height": 6,
+              "properties": {
+                "title": "RDS Free Storage Space (GB)",
+                "metrics": [
+                  ["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", "${DBInstanceIdentifier}", {"stat": "Average", "period": 300}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 19, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda Authorizer - Invocations & Errors",
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${LambdaFunctionName}", {"stat": "Sum", "period": 60, "label": "Invocations"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${LambdaFunctionName}", {"stat": "Sum", "period": 60, "label": "Errors"}],
+                  ["AWS/Lambda", "Throttles", "FunctionName", "${LambdaFunctionName}", {"stat": "Sum", "period": 60, "label": "Throttles"}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 19, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda Authorizer - Duration (ms)",
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "${LambdaFunctionName}", {"stat": "p50", "period": 60, "label": "p50"}],
+                  ["...", {"stat": "p95", "period": 60, "label": "p95"}],
+                  ["...", {"stat": "p99", "period": 60, "label": "p99"}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            }
+          ]
+        }
+
+  # ──────────────────────────────────────────────────────────────
+  # Alarms - Application Health
+  # ──────────────────────────────────────────────────────────────
+  HighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-identity-high-5xx-rate"
+      AlarmDescription: Identity service 5xx error rate exceeds threshold
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref ALBFullName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+      OKActions:
+        - !Ref AlarmSNSTopicArn
+
+  HighLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-identity-high-latency"
+      AlarmDescription: Identity service P95 latency exceeds 2 seconds
+      Namespace: AWS/ApplicationELB
+      MetricName: TargetResponseTime
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref ALBFullName
+      ExtendedStatistic: p95
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 2.0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+
+  UnhealthyHostAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-identity-unhealthy-hosts"
+      AlarmDescription: One or more ECS tasks are unhealthy
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref ALBFullName
+        - Name: TargetGroup
+          Value: !Ref TargetGroupFullName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+
+  # ──────────────────────────────────────────────────────────────
+  # Alarms - ECS
+  # ──────────────────────────────────────────────────────────────
+  HighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-identity-ecs-high-cpu"
+      AlarmDescription: ECS CPU utilization exceeds 80%
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSClusterName
+        - Name: ServiceName
+          Value: !Ref ECSServiceName
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+
+  HighMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-identity-ecs-high-memory"
+      AlarmDescription: ECS memory utilization exceeds 85%
+      Namespace: AWS/ECS
+      MetricName: MemoryUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSClusterName
+        - Name: ServiceName
+          Value: !Ref ECSServiceName
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 85
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+
+  # ──────────────────────────────────────────────────────────────
+  # Alarms - Database
+  # ──────────────────────────────────────────────────────────────
+  DBHighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-identity-rds-high-cpu"
+      AlarmDescription: RDS CPU utilization exceeds 80%
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DBInstanceIdentifier
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+
+  DBLowStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-identity-rds-low-storage"
+      AlarmDescription: RDS free storage below 5 GB
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DBInstanceIdentifier
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5368709120
+      ComparisonOperator: LessThanThreshold
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+
+  DBHighConnectionsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-identity-rds-high-connections"
+      AlarmDescription: RDS connection count exceeds 80
+      Namespace: AWS/RDS
+      MetricName: DatabaseConnections
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DBInstanceIdentifier
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+
+  # ──────────────────────────────────────────────────────────────
+  # Alarms - Lambda Authorizer
+  # ──────────────────────────────────────────────────────────────
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-identity-authorizer-errors"
+      AlarmDescription: JWT authorizer Lambda errors detected
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref LambdaFunctionName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+
+  LambdaThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-identity-authorizer-throttles"
+      AlarmDescription: JWT authorizer Lambda is being throttled
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref LambdaFunctionName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+
+  # ──────────────────────────────────────────────────────────────
+  # Metric Filters - Security Events
+  # ──────────────────────────────────────────────────────────────
+  FailedAuthMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub "/ecs/${Environment}-identity-service"
+      FilterPattern: '{ $.event = "authentication_failed" }'
+      MetricTransformations:
+        - MetricName: FailedAuthenticationAttempts
+          MetricNamespace: !Sub "${Environment}/IdentityService/Security"
+          MetricValue: "1"
+          DefaultValue: 0
+
+  FailedAuthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Environment}-identity-brute-force-detection"
+      AlarmDescription: High number of failed authentication attempts (possible brute force)
+      Namespace: !Sub "${Environment}/IdentityService/Security"
+      MetricName: FailedAuthenticationAttempts
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 50
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+
+  TokenValidationFailureFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Environment}-jwt-authorizer"
+      FilterPattern: '{ $.result = "DENY" }'
+      MetricTransformations:
+        - MetricName: TokenValidationFailures
+          MetricNamespace: !Sub "${Environment}/IdentityService/Security"
+          MetricValue: "1"
+          DefaultValue: 0
+
+Outputs:
+  DashboardUrl:
+    Description: CloudWatch dashboard URL
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${Environment}-identity-service"
+
+  AlarmCount:
+    Description: Number of alarms created
+    Value: "10"
